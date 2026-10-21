@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>எண் மர்மப் பெட்டி - தமிழ் பால் வகைகள்</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Canvas Confetti -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Latha:wght@400;700&family=MUKTA+Malar:wght@400;600;700;800&display=swap');
+        
+        body {
+            font-family: 'MUKTA Malar', 'Latha', sans-serif;
+            user-select: none;
+            touch-action: manipulation;
+        }
+
+        /* Mirror webcam canvas for natural user movement */
+        .mirror {
+            transform: scaleX(-1);
+        }
+
+        /* 3D Box Perspective & Flip Animations */
+        .box-card {
+            perspective: 1000px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .box-inner {
+            transition: transform 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            transform-style: preserve-3d;
+        }
+
+        .box-card.open .box-inner {
+            transform: rotateY(180deg) scale(1.05);
+        }
+
+        .box-front, .box-back {
+            backface-visibility: hidden;
+        }
+
+        .box-back {
+            transform: rotateY(180deg);
+        }
+
+        /* Pulse glowing effect for dwell target */
+        @keyframes pulse-border {
+            0%, 100% { border-color: rgba(234, 179, 8, 0.9); box-shadow: 0 0 20px rgba(234, 179, 8, 0.6); }
+            50% { border-color: rgba(250, 204, 21, 1); box-shadow: 0 0 35px rgba(250, 204, 21, 0.9); }
+        }
+
+        .dwelling-active {
+            animation: pulse-border 1s infinite;
+        }
+
+        /* Dwell Ring SVG animation */
+        .progress-ring-circle {
+            transition: stroke-dashoffset 0.1s linear;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        /* Custom Glassmorphism */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen overflow-hidden flex flex-col justify-between select-none">
+
+    <!-- TOP BAR / HEADER -->
+    <header class="relative z-20 glass-panel px-6 py-3 mx-4 mt-3 rounded-2xl flex items-center justify-between shadow-2xl">
+        <div class="flex items-center space-x-3">
+            <div class="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+                <i data-lucide="package" class="w-7 h-7"></i>
+            </div>
+            <div>
+                <h1 class="text-xl md:text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-amber-300 via-orange-400 to-yellow-200">
+                    மர்மப் பெட்டி - தமிழ் பால் வகைகள்
+                </h1>
+                <p class="text-xs text-slate-300 hidden sm:block">விரலால் சுட்டிக்காட்டி விடை அளிக்கவும் (Dwell 1 Second)</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <!-- Score Badge -->
+            <div class="flex items-center space-x-2 bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700">
+                <i data-lucide="trophy" class="w-5 h-5 text-amber-400"></i>
+                <span class="text-xs text-slate-400 font-semibold">புள்ளிகள்:</span>
+                <span id="scoreDisplay" class="text-xl font-extrabold text-amber-400">0</span>
+            </div>
+
+            <!-- Timer Badge -->
+            <div class="flex items-center space-x-2 bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-700">
+                <i data-lucide="timer" class="w-5 h-5 text-cyan-400"></i>
+                <span class="text-xs text-slate-400 font-semibold">நேரம்:</span>
+                <span id="timerDisplay" class="text-xl font-extrabold text-cyan-300">15s</span>
+            </div>
+
+            <!-- Restart / Controls Button -->
+            <button id="restartBtn" onclick="resetGame()" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition border border-slate-700 hover:border-amber-500/50">
+                <i data-lucide="rotate-ccw" class="w-5 h-5"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN GAME ARENA -->
+    <main id="gameContainer" class="relative flex-1 m-4 rounded-3xl overflow-hidden glass-panel border border-slate-800 shadow-2xl flex flex-col justify-between">
+
+        <!-- Hidden Webcam video input -->
+        <video id="webcam" class="hidden" playsinline></video>
+
+        <!-- Canvas for mirror video feed & hand tracking feedback -->
+        <canvas id="outputCanvas" class="absolute inset-0 w-full h-full object-cover mirror z-0"></canvas>
+
+        <!-- Question Banner Display -->
+        <div class="relative z-10 my-4 mx-auto max-w-2xl w-11/12">
+            <div class="bg-gradient-to-r from-slate-900/90 via-indigo-950/90 to-slate-900/90 backdrop-blur-md px-6 py-4 rounded-2xl border-2 border-amber-500/40 shadow-2xl text-center">
+                <span id="questionNum" class="inline-block px-3 py-1 bg-amber-500/20 text-amber-300 text-xs font-bold rounded-full border border-amber-500/30 mb-2">
+                    கேள்வி 1 / 10
+                </span>
+                <h2 id="questionText" class="text-xl md:text-3xl font-extrabold text-white tracking-wide leading-relaxed">
+                    கேள்வி ஏற்றப்படுகிறது...
+                </h2>
+            </div>
+        </div>
+
+        <!-- FOUR CORNER MYSTERY GIFT BOXES GRID -->
+        <div class="relative z-10 grid grid-cols-2 grid-rows-2 gap-4 md:gap-8 p-4 md:p-8 flex-1">
+            
+            <!-- TOP-LEFT BOX (Option 0) -->
+            <div id="box-0" class="box-card relative w-full h-full cursor-pointer flex items-start justify-start" data-option-idx="0">
+                <div class="box-inner relative w-full h-full max-w-[280px] max-h-[160px] md:max-h-[200px]">
+                    <!-- Front Cover -->
+                    <div class="box-front absolute inset-0 bg-gradient-to-br from-purple-700 via-indigo-800 to-purple-900 rounded-2xl border-2 border-purple-400/50 p-4 shadow-xl flex flex-col items-center justify-center text-center">
+                        <div class="w-12 h-12 md:w-16 md:h-16 bg-amber-400/20 rounded-full flex items-center justify-center mb-2 border border-amber-400/40">
+                            <i data-lucide="gift" class="w-8 h-8 md:w-10 md:h-10 text-amber-300"></i>
+                        </div>
+                        <span class="text-sm md:text-base text-purple-200 font-bold mb-1">மர்மப் பெட்டி A</span>
+                        <div id="optText-0" class="text-base md:text-2xl font-black text-amber-300 bg-slate-900/80 px-3 py-1.5 rounded-lg w-full truncate border border-amber-500/30">
+                            -
+                        </div>
+                    </div>
+                    <!-- Back Cover (Opened State) -->
+                    <div class="box-back absolute inset-0 bg-emerald-700 rounded-2xl border-2 border-emerald-400 p-4 flex items-center justify-center text-center shadow-2xl">
+                        <div id="resultText-0" class="text-xl md:text-2xl font-black text-white">
+                            சரியான விடை!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TOP-RIGHT BOX (Option 1) -->
+            <div id="box-1" class="box-card relative w-full h-full cursor-pointer flex items-start justify-end" data-option-idx="1">
+                <div class="box-inner relative w-full h-full max-w-[280px] max-h-[160px] md:max-h-[200px]">
+                    <div class="box-front absolute inset-0 bg-gradient-to-br from-blue-700 via-sky-800 to-blue-900 rounded-2xl border-2 border-sky-400/50 p-4 shadow-xl flex flex-col items-center justify-center text-center">
+                        <div class="w-12 h-12 md:w-16 md:h-16 bg-amber-400/20 rounded-full flex items-center justify-center mb-2 border border-amber-400/40">
+                            <i data-lucide="gift" class="w-8 h-8 md:w-10 md:h-10 text-amber-300"></i>
+                        </div>
+                        <span class="text-sm md:text-base text-sky-200 font-bold mb-1">மர்மப் பெட்டி B</span>
+                        <div id="optText-1" class="text-base md:text-2xl font-black text-amber-300 bg-slate-900/80 px-3 py-1.5 rounded-lg w-full truncate border border-amber-500/30">
+                            -
+                        </div>
+                    </div>
+                    <div class="box-back absolute inset-0 bg-emerald-700 rounded-2xl border-2 border-emerald-400 p-4 flex items-center justify-center text-center shadow-2xl">
+                        <div id="resultText-1" class="text-xl md:text-2xl font-black text-white">
+                            சரியான விடை!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BOTTOM-LEFT BOX (Option 2) -->
+            <div id="box-2" class="box-card relative w-full h-full cursor-pointer flex items-end justify-start" data-option-idx="2">
+                <div class="box-inner relative w-full h-full max-w-[280px] max-h-[160px] md:max-h-[200px]">
+                    <div class="box-front absolute inset-0 bg-gradient-to-br from-rose-700 via-pink-800 to-rose-900 rounded-2xl border-2 border-pink-400/50 p-4 shadow-xl flex flex-col items-center justify-center text-center">
+                        <div class="w-12 h-12 md:w-16 md:h-16 bg-amber-400/20 rounded-full flex items-center justify-center mb-2 border border-amber-400/40">
+                            <i data-lucide="gift" class="w-8 h-8 md:w-10 md:h-10 text-amber-300"></i>
+                        </div>
+                        <span class="text-sm md:text-base text-pink-200 font-bold mb-1">மர்மப் பெட்டி C</span>
+                        <div id="optText-2" class="text-base md:text-2xl font-black text-amber-300 bg-slate-900/80 px-3 py-1.5 rounded-lg w-full truncate border border-amber-500/30">
+                            -
+                        </div>
+                    </div>
+                    <div class="box-back absolute inset-0 bg-emerald-700 rounded-2xl border-2 border-emerald-400 p-4 flex items-center justify-center text-center shadow-2xl">
+                        <div id="resultText-2" class="text-xl md:text-2xl font-black text-white">
+                            சரியான விடை!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BOTTOM-RIGHT BOX (Option 3) -->
+            <div id="box-3" class="box-card relative w-full h-full cursor-pointer flex items-end justify-end" data-option-idx="3">
+                <div class="box-inner relative w-full h-full max-w-[280px] max-h-[160px] md:max-h-[200px]">
+                    <div class="box-front absolute inset-0 bg-gradient-to-br from-emerald-700 via-teal-800 to-emerald-900 rounded-2xl border-2 border-emerald-400/50 p-4 shadow-xl flex flex-col items-center justify-center text-center">
+                        <div class="w-12 h-12 md:w-16 md:h-16 bg-amber-400/20 rounded-full flex items-center justify-center mb-2 border border-amber-400/40">
+                            <i data-lucide="gift" class="w-8 h-8 md:w-10 md:h-10 text-amber-300"></i>
+                        </div>
+                        <span class="text-sm md:text-base text-emerald-200 font-bold mb-1">மர்மப் பெட்டி D</span>
+                        <div id="optText-3" class="text-base md:text-2xl font-black text-amber-300 bg-slate-900/80 px-3 py-1.5 rounded-lg w-full truncate border border-amber-500/30">
+                            -
+                        </div>
+                    </div>
+                    <div class="box-back absolute inset-0 bg-emerald-700 rounded-2xl border-2 border-emerald-400 p-4 flex items-center justify-center text-center shadow-2xl">
+                        <div id="resultText-3" class="text-xl md:text-2xl font-black text-white">
+                            சரியான விடை!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- FINGER CURSOR & DWELL TIMER SVG OVERLAY -->
+        <div id="fingerCursor" class="pointer-events-none fixed z-50 w-16 h-16 transform -translate-x-1/2 -translate-y-1/2 transition-transform duration-75 hidden">
+            <!-- Dynamic Dwell Progress SVG -->
+            <svg class="w-full h-full" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="42" stroke="rgba(255,255,255,0.3)" stroke-width="8" fill="none" />
+                <circle id="dwellProgress" class="progress-ring-circle" cx="50" cy="50" r="42" stroke="#f59e0b" stroke-width="8" fill="none" stroke-dasharray="263.89" stroke-dashoffset="263.89" stroke-linecap="round" />
+            </svg>
+            <!-- Glowing Tip Indicator Icon -->
+            <div class="absolute inset-0 flex items-center justify-center">
+                <div class="w-5 h-5 bg-amber-400 rounded-full shadow-[0_0_15px_#f59e0b] border-2 border-white animate-ping"></div>
+                <div class="w-4 h-4 bg-amber-300 rounded-full border border-white absolute"></div>
+            </div>
+        </div>
+
+        <!-- WEBCAM PERMISSION & CAMERA START MODAL -->
+        <div id="cameraModal" class="absolute inset-0 z-40 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+            <div class="max-w-md bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl flex flex-col items-center">
+                <div class="w-20 h-20 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center mb-6 border border-amber-500/30">
+                    <i data-lucide="camera" class="w-10 h-10"></i>
+                </div>
+                <h3 class="text-2xl font-bold text-white mb-2">வெப்கேம் அனுமதியளிக்கவும்</h3>
+                <p class="text-slate-400 text-sm mb-6 leading-relaxed">
+                    கை விரல் அசைவுகளை (Hand Gesture Tracking) கண்டறிய உங்கள் கேமரா தேவைப்படுகிறது. 'விளையாட்டைத் தொடங்கு' பொத்தானை அழுத்தவும்.
+                </p>
+                <button onclick="initCamera()" class="px-8 py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-black rounded-xl text-lg shadow-lg hover:shadow-amber-500/30 transition duration-300 flex items-center space-x-2">
+                    <i data-lucide="play" class="w-6 h-6"></i>
+                    <span>விளையாட்டைத் தொடங்கு</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- GAME OVER / HIGH SCORES OVERLAY -->
+        <div id="gameOverModal" class="absolute inset-0 z-40 bg-slate-950/95 backdrop-blur-lg flex items-center justify-center p-6 hidden">
+            <div class="max-w-lg w-full bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl text-center">
+                <div class="w-20 h-20 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-amber-500/30">
+                    <i data-lucide="award" class="w-12 h-12"></i>
+                </div>
+                <h3 class="text-3xl font-black text-white mb-1">விளையாட்டு முடிந்தது!</h3>
+                <p class="text-slate-400 text-sm mb-6">சிறப்பான முயற்சி! உங்கள் மதிப்பெண்கள் கீழே:</p>
+
+                <!-- Final Score Display -->
+                <div class="bg-slate-800/80 rounded-2xl p-4 mb-6 border border-slate-700 flex justify-around items-center">
+                    <div>
+                        <span class="block text-xs text-slate-400 font-bold mb-1">மொத்த புள்ளிகள்</span>
+                        <span id="finalScore" class="text-4xl font-extrabold text-amber-400">0</span>
+                    </div>
+                    <div class="h-10 w-px bg-slate-700"></div>
+                    <div>
+                        <span class="block text-xs text-slate-400 font-bold mb-1">சரியான விடைகள்</span>
+                        <span id="correctAnswersCount" class="text-4xl font-extrabold text-emerald-400">0/10</span>
+                    </div>
+                </div>
+
+                <!-- High Score Leaderboard List -->
+                <div class="mb-6 text-left">
+                    <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center">
+                        <i data-lucide="trophy" class="w-4 h-4 mr-1 text-amber-400"></i> அதிக மதிப்பெண்கள் (High Scores)
+                    </h4>
+                    <div id="highScoresList" class="bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 space-y-2 text-sm">
+                        <!-- Populated dynamically via JavaScript -->
+                    </div>
+                </div>
+
+                <button onclick="resetGame()" class="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-black rounded-xl text-lg shadow-xl transition flex items-center justify-center space-x-2">
+                    <i data-lucide="rotate-ccw" class="w-6 h-6"></i>
+                    <span>மீண்டும் விளையாடுக</span>
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        /* -------------------------------------------------------------------
+         * 1. QUESTION BANK - TAMIL GENDER TYPES (தமிழ் பால் வகைகள்)
+         * -------------------------------------------------------------------
+         * 5 Types of Paal:
+         * 1. ஆண்பால் (Masculine)
+         * 2. பெண்பால் (Feminine)
+         * 3. பலர்பால் (Epicene / Human Plural)
+         * 4. ஒன்றன்பால் (Neuter Singular)
+         * 5. பலவின்பால் (Neuter Plural)
+         * ------------------------------------------------------------------- */
+        const QUESTION_BANK = [
+            {
+                question: "'குதிரை' என்பது என்ன பால்?",
+                options: ["ஆண்பால்", "பெண்பால்", "ஒன்றன்பால்", "பலவின்பால்"],
+                answerIdx: 2
+            },
+            {
+                question: "'மாணவர்கள்' என்பது எந்தப் பாலைக் குறிக்கும்?",
+                options: ["பலர்பால்", "ஆண்பால்", "பெண்பால்", "பலவின்பால்"],
+                answerIdx: 0
+            },
+            {
+                question: "'அரசன்' என்ற சொல்லின் பால் வகை எது?",
+                options: ["பெண்பால்", "ஆண்பால்", "ஒன்றன்பால்", "பலர்பால்"],
+                answerIdx: 1
+            },
+            {
+                question: "'சிறுமி' என்பது என்ன பால்?",
+                options: ["ஆண்பால்", "பெண்பால்", "ஒன்றன்பால்", "பலவின்பால்"],
+                answerIdx: 1
+            },
+            {
+                question: "'மரங்கள்' என்பது எந்தப் பாலைச் சேர்ந்தது?",
+                options: ["ஒன்றன்பால்", "பலர்பால்", "பலவின்பால்", "பெண்பால்"],
+                answerIdx: 2
+            },
+            {
+                question: "'ஆசிரியர்' என்பது என்ன பால்?",
+                options: ["ஆண்பால்", "பெண்பால்", "பலர்பால்", "ஒன்றன்பால்"],
+                answerIdx: 2
+            },
+            {
+                question: "'சிங்கம்' என்ற சொல் எந்தப் பாலுக்கு உரியது?",
+                options: ["ஒன்றன்பால்", "ஆண்பால்", "பலவின்பால்", "பெண்பால்"],
+                answerIdx: 0
+            },
+            {
+                question: "'தாய்' என்பது என்ன பால்?",
+                options: ["ஆண்பால்", "பெண்பால்", "பலர்பால்", "ஒன்றன்பால்"],
+                answerIdx: 1
+            },
+            {
+                question: "'பசுக்கள்' என்பது எந்தப் பாலைச் சேர்ந்தது?",
+                options: ["ஒன்றன்பால்", "பலவின்பால்", "பலர்பால்", "ஆண்பால்"],
+                answerIdx: 1
+            },
+            {
+                question: "'சிறுவன்' என்பது எந்தப் பால் வகை?",
+                options: ["ஆண்பால்", "பெண்பால்", "பலர்பால்", "ஒன்றன்பால்"],
+                answerIdx: 0
+            }
+        ];
+
+        /* -------------------------------------------------------------------
+         * 2. GLOBAL GAME STATE VARIABLES
+         * ------------------------------------------------------------------- */
+        let currentQuestionIdx = 0;
+        let score = 0;
+        let correctCount = 0;
+        let questionTimer = 15;
+        let timerInterval = null;
+        let isAnswering = false;
+
+        // Dwell Mechanics
+        let activeHoveredBox = null;
+        let dwellStartTime = null;
+        const DWELL_DURATION = 1000; // 1 second dwell duration
+
+        // Audio Context Synthesizer
+        let audioCtx = null;
+
+        // High Scores Storage Key
+        const STORAGE_KEY = 'misteri_nombor_highscores';
+
+        /* -------------------------------------------------------------------
+         * 3. WEB AUDIO API SYNTHESIZER (No external audio file dependencies)
+         * ------------------------------------------------------------------- */
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                const now = audioCtx.currentTime;
+
+                if (type === 'tick') {
+                    // Quick soft click for dwell hover
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(440, now);
+                    gain.gain.setValueAtTime(0.05, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                    osc.start(now);
+                    osc.stop(now + 0.05);
+                } else if (type === 'correct') {
+                    // Happy chord cascade
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(523.25, now); // C5
+                    osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+                    osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                    osc.start(now);
+                    osc.stop(now + 0.4);
+                } else if (type === 'wrong') {
+                    // Low buzz tone
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(180, now);
+                    osc.frequency.linearRampToValueAtTime(110, now + 0.3);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                } else if (type === 'fanfare') {
+                    // Game finish fanfare
+                    [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                        const o = audioCtx.createOscillator();
+                        const g = audioCtx.createGain();
+                        o.connect(g);
+                        g.connect(audioCtx.destination);
+                        o.type = 'triangle';
+                        o.frequency.setValueAtTime(freq, now + i * 0.12);
+                        g.gain.setValueAtTime(0.2, now + i * 0.12);
+                        g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.3);
+                        o.start(now + i * 0.12);
+                        o.stop(now + i * 0.12 + 0.3);
+                    });
+                }
+            } catch (e) {
+                console.warn("Audio playback error:", e);
+            }
+        }
+
+        /* -------------------------------------------------------------------
+         * 4. GAME INITIALIZATION AND QUESTION MANAGEMENT
+         * ------------------------------------------------------------------- */
+        window.addEventListener('load', () => {
+            lucide.createIcons();
+            loadHighScores();
+        });
+
+        function startGame() {
+            document.getElementById('cameraModal').classList.add('hidden');
+            currentQuestionIdx = 0;
+            score = 0;
+            correctCount = 0;
+            updateScoreUI();
+            loadQuestion(currentQuestionIdx);
+        }
+
+        function loadQuestion(index) {
+            if (index >= QUESTION_BANK.length) {
+                endGame();
+                return;
+            }
+
+            isAnswering = false;
+            activeHoveredBox = null;
+            dwellStartTime = null;
+            resetDwellProgress();
+
+            const q = QUESTION_BANK[index];
+            
+            // UI Updates
+            document.getElementById('questionNum').innerText = `கேள்வி ${index + 1} / ${QUESTION_BANK.length}`;
+            document.getElementById('questionText').innerText = q.question;
+
+            // Reset Gift Boxes UI
+            for (let i = 0; i < 4; i++) {
+                const boxEl = document.getElementById(`box-${i}`);
+                const optTextEl = document.getElementById(`optText-${i}`);
+                
+                boxEl.classList.remove('open', 'dwelling-active');
+                optTextEl.innerText = q.options[i];
+            }
+
+            // Start Timer
+            startTimer();
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            questionTimer = 15;
+            document.getElementById('timerDisplay').innerText = `${questionTimer}s`;
+
+            timerInterval = setInterval(() => {
+                questionTimer--;
+                document.getElementById('timerDisplay').innerText = `${questionTimer}s`;
+
+                if (questionTimer <= 0) {
+                    clearInterval(timerInterval);
+                    handleTimeOut();
+                }
+            }, 1000);
+        }
+
+        function handleTimeOut() {
+            if (isAnswering) return;
+            isAnswering = true;
+            playSound('wrong');
+
+            // Highlight Correct Answer Box
+            const q = QUESTION_BANK[currentQuestionIdx];
+            const correctBox = document.getElementById(`box-${q.answerIdx}`);
+            correctBox.classList.add('open');
+
+            setTimeout(() => {
+                currentQuestionIdx++;
+                loadQuestion(currentQuestionIdx);
+            }, 2000);
+        }
+
+        /* -------------------------------------------------------------------
+         * 5. ANSWER SELECTION & DWELL SELECTION LOGIC
+         * ------------------------------------------------------------------- */
+        function selectAnswer(boxIdx) {
+            if (isAnswering) return;
+            isAnswering = true;
+            clearInterval(timerInterval);
+
+            const q = QUESTION_BANK[currentQuestionIdx];
+            const chosenBox = document.getElementById(`box-${boxIdx}`);
+            const resultText = document.getElementById(`resultText-${boxIdx}`);
+
+            chosenBox.classList.add('open');
+
+            if (boxIdx === q.answerIdx) {
+                // Correct Answer
+                playSound('correct');
+                const bonusPoints = questionTimer * 10;
+                const totalQScore = 100 + bonusPoints;
+                score += totalQScore;
+                correctCount++;
+                updateScoreUI();
+
+                resultText.innerHTML = `<span class="text-emerald-300">சரியான விடை!</span><br/><span class="text-xs text-amber-200">+${totalQScore} புள்ளிகள்</span>`;
+
+                // Confetti FX
+                try {
+                    confetti({
+                        particleCount: 50,
+                        spread: 60,
+                        origin: { y: 0.6 }
+                    });
+                } catch(e) {}
+
+            } else {
+                // Wrong Answer
+                playSound('wrong');
+                resultText.innerHTML = `<span class="text-rose-300">தவறான விடை!</span>`;
+
+                // Reveal correct box too
+                setTimeout(() => {
+                    document.getElementById(`box-${q.answerIdx}`).classList.add('open');
+                }, 400);
+            }
+
+            setTimeout(() => {
+                currentQuestionIdx++;
+                loadQuestion(currentQuestionIdx);
+            }, 2200);
+        }
+
+        function updateScoreUI() {
+            document.getElementById('scoreDisplay').innerText = score;
+        }
+
+        /* -------------------------------------------------------------------
+         * 6. GAME OVER & HIGH SCORES DASHBOARD
+         * ------------------------------------------------------------------- */
+        function endGame() {
+            clearInterval(timerInterval);
+            playSound('fanfare');
+
+            document.getElementById('finalScore').innerText = score;
+            document.getElementById('correctAnswersCount').innerText = `${correctCount}/${QUESTION_BANK.length}`;
+
+            saveHighScore(score);
+            renderHighScores();
+
+            document.getElementById('gameOverModal').classList.remove('hidden');
+        }
+
+        function resetGame() {
+            document.getElementById('gameOverModal').classList.add('hidden');
+            startGame();
+        }
+
+        function saveHighScore(newScore) {
+            let scores = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            scores.push({ score: newScore, date: new Date().toLocaleDateString('ta-IN') });
+            scores.sort((a, b) => b.score - a.score);
+            scores = scores.slice(0, 5); // Keep top 5
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(scores));
+        }
+
+        function loadHighScores() {
+            renderHighScores();
+        }
+
+        function renderHighScores() {
+            const listEl = document.getElementById('highScoresList');
+            let scores = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            
+            if (scores.length === 0) {
+                listEl.innerHTML = `<div class="text-slate-500 text-center py-2">இன்னும் பதிவுகள் இல்லை</div>`;
+                return;
+            }
+
+            listEl.innerHTML = scores.map((s, idx) => `
+                <div class="flex justify-between items-center bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                    <span class="font-bold text-amber-400">#${idx + 1} - ${s.score} புள்ளிகள்</span>
+                    <span class="text-xs text-slate-500">${s.date}</span>
+                </div>
+            `).join('');
+        }
+
+        /* -------------------------------------------------------------------
+         * 7. MEDIAPIPE HAND TRACKING & WEBCAM LOGIC
+         * ------------------------------------------------------------------- */
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('outputCanvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const cursorEl = document.getElementById('fingerCursor');
+        const dwellProgressCircle = document.getElementById('dwellProgress');
+        const CIRCUMFERENCE = 2 * Math.PI * 42; // 263.89 for r=42
+
+        function initCamera() {
+            initAudio();
+            document.getElementById('cameraModal').classList.add('hidden');
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            camera.start();
+            startGame();
+        }
+
+        function onHandResults(results) {
+            // Resize Canvas to match dimensions
+            canvasElement.width = canvasElement.clientWidth;
+            canvasElement.height = canvasElement.clientHeight;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // Draw WebCam feed onto video canvas
+            if (results.image) {
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Landmark 8 is the INDEX FINGER TIP
+                const indexTip = landmarks[8];
+
+                // Convert normalized landmark (0 to 1) to screen coordinates
+                // Note: Canvas is mirrored via CSS `transform: scaleX(-1)`
+                const screenX = (1 - indexTip.x) * window.innerWidth;
+                const screenY = indexTip.y * window.innerHeight;
+
+                // Update Finger Cursor position
+                cursorEl.style.left = `${screenX}px`;
+                cursorEl.style.top = `${screenY}px`;
+                cursorEl.classList.remove('hidden');
+
+                // Check collision with the 4 corner box elements
+                checkDwellCollision(screenX, screenY);
+
+            } else {
+                // Hide pointer when no hand detected
+                cursorEl.classList.add('hidden');
+                resetDwellProgress();
+            }
+
+            canvasCtx.restore();
+        }
+
+        /* -------------------------------------------------------------------
+         * 8. DWELL DURATION DETECTOR & HIT-TEST LOGIC
+         * ------------------------------------------------------------------- */
+        function checkDwellCollision(x, y) {
+            if (isAnswering) return;
+
+            let hoveredBoxIndex = null;
+
+            for (let i = 0; i < 4; i++) {
+                const boxEl = document.getElementById(`box-${i}`);
+                const rect = boxEl.getBoundingClientRect();
+
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    hoveredBoxIndex = i;
+                    break;
+                }
+            }
+
+            if (hoveredBoxIndex !== null) {
+                if (activeHoveredBox !== hoveredBoxIndex) {
+                    // Started hovering new box
+                    activeHoveredBox = hoveredBoxIndex;
+                    dwellStartTime = Date.now();
+                    playSound('tick');
+
+                    // Highlight box
+                    document.querySelectorAll('.box-card').forEach(b => b.classList.remove('dwelling-active'));
+                    document.getElementById(`box-${hoveredBoxIndex}`).classList.add('dwelling-active');
+                } else {
+                    // Continuing hover on same box
+                    const elapsed = Date.now() - dwellStartTime;
+                    const progress = Math.min(elapsed / DWELL_DURATION, 1);
+                    
+                    // Update SVG Progress Ring
+                    const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
+                    dwellProgressCircle.style.strokeDashoffset = offset;
+
+                    if (progress >= 1) {
+                        // Dwell complete - Select Answer!
+                        const selectedIndex = activeHoveredBox;
+                        resetDwellProgress();
+                        selectAnswer(selectedIndex);
+                    }
+                }
+            } else {
+                // Pointer moved out of boxes
+                resetDwellProgress();
+            }
+        }
+
+        function resetDwellProgress() {
+            activeHoveredBox = null;
+            dwellStartTime = null;
+            dwellProgressCircle.style.strokeDashoffset = CIRCUMFERENCE;
+            document.querySelectorAll('.box-card').forEach(b => b.classList.remove('dwelling-active'));
+        }
+    </script>
+</body>
+</html>
